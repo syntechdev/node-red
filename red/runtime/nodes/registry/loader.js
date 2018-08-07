@@ -62,6 +62,17 @@ function copyObjectProperties(src,dst,copyList,blockList) {
         }
     }
 }
+function requireModule(name) {
+    var moduleInfo = registry.getModuleInfo(name);
+    if (moduleInfo && moduleInfo.path) {
+        var relPath = path.relative(__dirname, moduleInfo.path);
+        return require(relPath);
+    } else {
+        var err = new Error(`Cannot find module '${name}'`);
+        err.code = "MODULE_NOT_FOUND";
+        throw err;
+    }
+}
 
 function createNodeApi(node) {
     var red = {
@@ -71,6 +82,7 @@ function createNodeApi(node) {
         events: runtime.events,
         util: runtime.util,
         version: runtime.version,
+        require: requireModule
     }
     copyObjectProperties(runtime.nodes,red.nodes,["createNode","getNode","eachNode","addCredentials","getCredentials","deleteCredentials" ]);
     red.nodes.registerType = function(type,constructor,opts) {
@@ -84,7 +96,7 @@ function createNodeApi(node) {
         red.auth = runtime.adminApi.auth;
         red.httpAdmin = runtime.adminApi.adminApp;
         red.httpNode = runtime.nodeApp;
-        red.server = runtime.adminApi.server;
+        red.server = runtime.server;
     } else {
         //TODO: runtime.adminApi is always stubbed if not enabled, so this block
         // is unused - but may be needed for the unit tests
@@ -112,6 +124,7 @@ function createNodeApi(node) {
 
 function loadNodeFiles(nodeFiles) {
     var promises = [];
+    var nodes = [];
     for (var module in nodeFiles) {
         /* istanbul ignore else */
         if (nodeFiles.hasOwnProperty(module)) {
@@ -119,6 +132,7 @@ function loadNodeFiles(nodeFiles) {
                 !semver.satisfies(runtime.version().replace(/(\-[1-9A-Za-z-][0-9A-Za-z-\.]*)?(\+[0-9A-Za-z-\.]+)?$/,""), nodeFiles[module].redVersion)) {
                 //TODO: log it
                 runtime.log.warn("["+module+"] "+runtime.log._("server.node-version-mismatch",{version:nodeFiles[module].redVersion}));
+                nodeFiles[module].err = "version_mismatch";
                 continue;
             }
             if (module == "node-red" || !registry.getModuleInfo(module)) {
@@ -148,7 +162,14 @@ function loadNodeFiles(nodeFiles) {
                         }
 
                         try {
-                            promises.push(loadNodeConfig(nodeFiles[module].nodes[node]))
+                            promises.push(loadNodeConfig(nodeFiles[module].nodes[node]).then((function() {
+                                var m = module;
+                                var n = node;
+                                return function(nodeSet) {
+                                    nodeFiles[m].nodes[n] = nodeSet;
+                                    nodes.push(nodeSet);
+                                }
+                            })()));
                         } catch(err) {
                             //
                         }
@@ -158,16 +179,19 @@ function loadNodeFiles(nodeFiles) {
         }
     }
     return when.settle(promises).then(function(results) {
-        var nodes = results.map(function(r) {
-            registry.addNodeSet(r.value.id,r.value,r.value.version);
-            return r.value;
-        });
+        for (var module in nodeFiles) {
+            if (nodeFiles.hasOwnProperty(module)) {
+                if (!nodeFiles[module].err) {
+                    registry.addModule(nodeFiles[module]);
+                }
+            }
+        }
         return loadNodeSetList(nodes);
     });
 }
 
 function loadNodeConfig(fileInfo) {
-    return when.promise(function(resolve) {
+    return new Promise(function(resolve) {
         var file = fileInfo.file;
         var module = fileInfo.module;
         var name = fileInfo.name;
@@ -214,15 +238,15 @@ function loadNodeConfig(fileInfo) {
             } else {
                 var types = [];
 
-                var regExp = /<script ([^>]*)data-template-name=['"]([^'"]*)['"]/gi;
+                var regExp = /<script (?:[^>]*)data-template-name\s*=\s*['"]([^'"]*)['"]/gi;
                 var match = null;
 
                 while ((match = regExp.exec(content)) !== null) {
-                    types.push(match[2]);
+                    types.push(match[1]);
                 }
                 node.types = types;
 
-                var langRegExp = /^<script[^>]* data-lang=['"](.+?)['"]/i;
+                var langRegExp = /^<script[^>]* data-lang\s*=\s*['"](.+?)['"]/i;
                 regExp = /(<script[^>]* data-help-name=[\s\S]*?<\/script>)/gi;
                 match = null;
                 var mainContent = "";
@@ -255,6 +279,12 @@ function loadNodeConfig(fileInfo) {
                         break;
                     }
                 }
+                if (node.module === 'node-red') {
+                    // do not look up locales directory for core nodes
+                    node.namespace = node.module;
+                    resolve(node);
+                    return;
+                }
                 fs.stat(path.join(path.dirname(file),"locales"),function(err,stat) {
                     if (!err) {
                         node.namespace = node.id;
@@ -286,7 +316,7 @@ function loadNodeSet(node) {
     var nodeDir = path.dirname(node.file);
     var nodeFn = path.basename(node.file);
     if (!node.enabled) {
-        return when.resolve(node);
+        return Promise.resolve(node);
     } else {
     }
     try {
@@ -301,7 +331,7 @@ function loadNodeSet(node) {
                     node.enabled = true;
                     node.loaded = true;
                     return node;
-                }).otherwise(function(err) {
+                }).catch(function(err) {
                     node.err = err;
                     return node;
                 });
@@ -310,7 +340,7 @@ function loadNodeSet(node) {
         if (loadPromise == null) {
             node.enabled = true;
             node.loaded = true;
-            loadPromise = when.resolve(node);
+            loadPromise = Promise.resolve(node);
         }
         return loadPromise;
     } catch(err) {
@@ -327,7 +357,7 @@ function loadNodeSet(node) {
                 }
             }
         }
-        return when.resolve(node);
+        return Promise.resolve(node);
     }
 }
 
@@ -359,20 +389,29 @@ function addModule(module) {
         // TODO: nls
         var e = new Error("module_already_loaded");
         e.code = "module_already_loaded";
-        return when.reject(e);
+        return Promise.reject(e);
     }
     try {
         var moduleFiles = localfilesystem.getModuleFiles(module);
         return loadNodeFiles(moduleFiles);
     } catch(err) {
-        return when.reject(err);
+        return Promise.reject(err);
     }
 }
 
 function loadNodeHelp(node,lang) {
-    var dir = path.dirname(node.template);
     var base = path.basename(node.template);
-    var localePath = path.join(dir,"locales",lang,base);
+    var localePath;
+    if (node.module === 'node-red') {
+        var cat_dir = path.dirname(node.template);
+        var cat = path.basename(cat_dir);
+        var dir = path.dirname(cat_dir);
+        localePath = path.join(dir, "locales", lang, cat, base)
+    }
+    else {
+        var dir = path.dirname(node.template);
+        localePath = path.join(dir,"locales",lang,base);
+    }
     try {
         // TODO: make this async
         var content = fs.readFileSync(localePath, "utf8")

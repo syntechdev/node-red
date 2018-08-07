@@ -150,7 +150,62 @@ describe("red/nodes/registry/localfilesystem",function() {
         });
         it.skip("finds locales directory");
         it.skip("finds icon path directory");
-
+        it("scans icon files in the resources tree",function(done) {
+            var count = 0;
+            localfilesystem.init({
+                i18n:{registerMessageCatalog:function(){}},
+                events:{emit:function(eventName,dir){
+                    if (count === 0) {
+                        eventName.should.equal("node-icon-dir");
+                        dir.name.should.equal("node-red");
+                        dir.icons.should.be.an.Array();
+                        count = 1;
+                    } else if (count === 1) {
+                        done();
+                    }
+                }},
+                settings:{coreNodesDir:resourcesDir}
+            });
+            var list = localfilesystem.getNodeFiles(true);
+            list.should.have.property("node-red");
+            list["node-red"].should.have.property("icons");
+            list["node-red"].icons.should.have.length(2);
+            //list["node-red"].icons[1].should.have.property("path",path.join(__dirname,"resources/local/NestedDirectoryNode/NestedNode/icons"))
+            list["node-red"].icons[1].should.have.property("icons");
+            list["node-red"].icons[1].icons.should.have.length(1);
+            list["node-red"].icons[1].icons[0].should.eql("arrow-in.png");
+            done();
+        });
+        it("scans icons dir in library",function(done) {
+            var count = 0;
+            localfilesystem.init({
+                i18n:{registerMessageCatalog:function(){}},
+                events:{emit:function(eventName,dir){
+                    eventName.should.equal("node-icon-dir");
+                    if (count === 0) {
+                        dir.name.should.equal("node-red");
+                        dir.icons.should.be.an.Array();
+                        count = 1;
+                    } else if (count === 1) {
+                        dir.name.should.equal("Library");
+                        dir.icons.should.be.an.Array();
+                        dir.icons.length.should.equal(1);
+                        dir.icons[0].should.be.equal("test_icon.png");
+                        done();
+                    }
+                }},
+                settings:{userDir:userDir}
+            });
+            var list = localfilesystem.getNodeFiles(true);
+            list.should.have.property("node-red");
+            list["node-red"].should.have.property("icons");
+            list["node-red"].icons.should.have.length(2);
+            //list["node-red"].icons[1].should.have.property("path",path.join(__dirname,"resources/userDir/lib/icons"))
+            list["node-red"].icons[1].should.have.property("icons");
+            list["node-red"].icons[1].icons.should.have.length(1);
+            list["node-red"].icons[1].icons[0].should.eql("test_icon.png");
+            done();
+        });
     });
     describe("#getModuleFiles",function() {
         it("gets a nodes module files",function(done) {
@@ -196,5 +251,35 @@ describe("red/nodes/registry/localfilesystem",function() {
         });
         it.skip("finds locales directory");
         it.skip("finds icon path directory");
+        it("scans icon files with a module file",function(done) {
+            var _join = path.join;
+            stubs.push(sinon.stub(path,"join",function() {
+                if (arguments[0] == resourcesDir) {
+                    // This stops the module tree scan from going any higher
+                    // up the tree than resourcesDir.
+                    return arguments[0];
+                }
+                return _join.apply(null,arguments);
+            }));
+            localfilesystem.init({
+                i18n:{registerMessageCatalog:function(){}},
+                events:{emit:function(eventName,dir){
+                    eventName.should.equal("node-icon-dir");
+                    dir.name.should.equal("TestNodeModule");
+                    dir.icons.should.be.an.Array();
+                    done();
+                }},
+                settings:{coreNodesDir:moduleDir}
+            });
+            var nodeModule = localfilesystem.getModuleFiles('TestNodeModule');
+            nodeModule.should.have.property("TestNodeModule");
+            nodeModule.TestNodeModule.should.have.property('icons');
+
+            nodeModule.TestNodeModule.icons.should.have.length(1);
+            nodeModule.TestNodeModule.icons[0].should.have.property("path");
+            nodeModule.TestNodeModule.icons[0].should.have.property("icons");
+            nodeModule.TestNodeModule.icons[0].icons[0].should.eql("arrow-in.png");
+            done();
+        });
     });
 });

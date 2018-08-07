@@ -69,7 +69,7 @@ function filterNodeInfo(n) {
         r.module = n.module;
     }
     if (n.hasOwnProperty("err")) {
-        r.err = n.err.toString();
+        r.err = n.err;
     }
     return r;
 }
@@ -181,31 +181,42 @@ function loadNodeConfigs() {
     }
 }
 
-function addNodeSet(id,set,version) {
-    if (!set.err) {
-        set.types.forEach(function(t) {
-            nodeTypeToId[t] = id;
-        });
-    }
-    moduleNodes[set.module] = moduleNodes[set.module]||[];
-    moduleNodes[set.module].push(set.name);
+function addModule(module) {
+    moduleNodes[module.name] = [];
+    moduleConfigs[module.name] = module;
+    for (var setName in module.nodes) {
+        if (module.nodes.hasOwnProperty(setName)) {
+            var set = module.nodes[setName];
+            moduleNodes[module.name].push(set.name);
+            nodeList.push(set.id);
+            if (!set.err) {
+                set.types.forEach(function(t) {
+                    if (nodeTypeToId.hasOwnProperty(t)) {
+                        set.err = "Type already registered";
+                        set.err.code = "type_already_registered";
+                        set.err.details = {
+                            type: t,
+                            moduleA: getNodeInfo(t).module,
+                            moduleB: set.module
+                        }
 
-    if (!moduleConfigs[set.module]) {
-        moduleConfigs[set.module] = {
-            name: set.module,
-            nodes: {}
-        };
+                    }
+                });
+                if (!set.err) {
+                    set.types.forEach(function(t) {
+                        nodeTypeToId[t] = set.id;
+                    });
+                }
+            }
+        }
     }
-
-    if (version) {
-        moduleConfigs[set.module].version = version;
+    if (module.icons) {
+        icon_paths[module.name] = [];
+        module.icons.forEach(icon=>icon_paths[module.name].push(path.resolve(icon.path)) )
     }
-    moduleConfigs[set.module].local = set.local;
-
-    moduleConfigs[set.module].nodes[set.name] = set;
-    nodeList.push(id);
     nodeConfigCache = null;
 }
+
 
 function removeNode(id) {
     var config = moduleConfigs[getModule(id)].nodes[getNode(id)];
@@ -332,6 +343,7 @@ function getModuleInfo(module) {
             name: module,
             version: moduleConfigs[module].version,
             local: moduleConfigs[module].local,
+            path: moduleConfigs[module].path,
             nodes: []
         };
         for (var i = 0; i < nodes.length; ++i) {
@@ -412,6 +424,7 @@ function getAllNodeConfigs(lang) {
             var id = nodeList[i];
             var config = moduleConfigs[getModule(id)].nodes[getNode(id)];
             if (config.enabled && !config.err) {
+                result += "\n<!-- --- [red-module:"+id+"] --- -->\n";
                 result += config.config;
                 result += loader.getNodeHelp(config,lang||"en-US")||"";
                 //script += config.script;
@@ -434,7 +447,7 @@ function getNodeConfig(id,lang) {
     }
     config = config.nodes[getNode(id)];
     if (config) {
-        var result = config.config;
+        var result = "<!-- --- [red-module:"+id+"] --- -->\n"+config.config;
         result += loader.getNodeHelp(config,lang||"en-US")
 
         //if (config.script) {
@@ -577,8 +590,28 @@ var iconCache = {};
 var defaultIcon = path.resolve(__dirname + '/../../../../public/icons/arrow-in.png');
 
 function nodeIconDir(dir) {
+    return;
     icon_paths[dir.name] = icon_paths[dir.name] || [];
     icon_paths[dir.name].push(path.resolve(dir.path));
+
+    if (dir.icons) {
+        if (!moduleConfigs[dir.name]) {
+            moduleConfigs[dir.name] = {
+                name: dir.name,
+                nodes: {},
+                icons: []
+            };
+        }
+        var module = moduleConfigs[dir.name];
+        if (module.icons === undefined) {
+            module.icons = [];
+        }
+        dir.icons.forEach(function(icon) {
+            if (module.icons.indexOf(icon) === -1) {
+                module.icons.push(icon);
+            }
+        });
+    }
 }
 
 function getNodeIconPath(module,icon) {
@@ -607,6 +640,20 @@ function getNodeIconPath(module,icon) {
     }
 }
 
+function getNodeIcons() {
+    var iconList = {};
+
+    for (var module in moduleConfigs) {
+        if (moduleConfigs.hasOwnProperty(module)) {
+            if (moduleConfigs[module].icons) {
+                iconList[module] = [];
+                moduleConfigs[module].icons.forEach(icon=>{ iconList[module] = iconList[module].concat(icon.icons) });
+            }
+        }
+    }
+    return iconList;
+}
+
 var registry = module.exports = {
     init: init,
     load: load,
@@ -615,7 +662,9 @@ var registry = module.exports = {
     registerNodeConstructor: registerNodeConstructor,
     getNodeConstructor: getNodeConstructor,
 
-    addNodeSet: addNodeSet,
+
+    addModule: addModule,
+
     enableNodeSet: enableNodeSet,
     disableNodeSet: disableNodeSet,
 
@@ -629,6 +678,7 @@ var registry = module.exports = {
     getModuleInfo: getModuleInfo,
 
     getNodeIconPath: getNodeIconPath,
+    getNodeIcons: getNodeIcons,
     /**
      * Gets all of the node template configs
      * @return all of the node templates in a single string

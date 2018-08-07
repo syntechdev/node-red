@@ -105,12 +105,12 @@ Node.prototype.close = function(removed) {
     if (promises.length > 0) {
         return when.settle(promises).then(function() {
             if (this._context) {
-                 context.delete(this._alias||this.id,this.z);
+               return context.delete(this._alias||this.id,this.z);
             }
         });
     } else {
         if (this._context) {
-             context.delete(this._alias||this.id,this.z);
+            return context.delete(this._alias||this.id,this.z);
         }
         return;
     }
@@ -225,6 +225,12 @@ function log_helper(self, level, msg) {
         type: self.type,
         msg: msg
     };
+    if (self._alias) {
+        o._alias = self._alias;
+    }
+    if (self.z) {
+        o.z = self.z;
+    }
     if (self.name) {
         o.name = self.name;
     }

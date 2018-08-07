@@ -62,9 +62,13 @@ module.exports = function(RED) {
                            "results = (function(msg){ "+
                               "var __msgid__ = msg._msgid;"+
                               "var node = {"+
+                                 "id:__node__.id,"+
+                                 "name:__node__.name,"+
                                  "log:__node__.log,"+
                                  "error:__node__.error,"+
                                  "warn:__node__.warn,"+
+                                 "debug:__node__.debug,"+
+                                 "trace:__node__.trace,"+
                                  "on:__node__.on,"+
                                  "status:__node__.status,"+
                                  "send:function(msgs){ __node__.send(__msgid__,msgs);}"+
@@ -78,10 +82,13 @@ module.exports = function(RED) {
             console:console,
             util:util,
             Buffer:Buffer,
+            Date: Date,
             RED: {
                 util: RED.util
             },
             __node__: {
+                id: node.id,
+                name: node.name,
                 log: function() {
                     node.log.apply(node, arguments);
                 },
@@ -90,6 +97,12 @@ module.exports = function(RED) {
                 },
                 warn: function() {
                     node.warn.apply(node, arguments);
+                },
+                debug: function() {
+                    node.debug.apply(node, arguments);
+                },
+                trace: function() {
+                    node.trace.apply(node, arguments);
                 },
                 send: function(id, msgs) {
                     sendResults(node, id, msgs);
@@ -196,7 +209,14 @@ module.exports = function(RED) {
         }
         var context = vm.createContext(sandbox);
         try {
-            this.script = vm.createScript(functionText);
+            this.script = vm.createScript(functionText, {
+                filename: 'Function node:'+this.id+(this.name?' ['+this.name+']':''), // filename for stack traces
+                displayErrors: true
+                // Using the following options causes node 4/6 to not include the line number
+                // in the stack output. So don't use them.
+                // lineOffset: -11, // line number offset to be used for stack traces
+                // columnOffset: 0, // column number offset to be used for stack traces
+            });
             this.on("input", function(msg) {
                 try {
                     var start = process.hrtime();
@@ -211,6 +231,13 @@ module.exports = function(RED) {
                         this.status({fill:"yellow",shape:"dot",text:""+converted});
                     }
                 } catch(err) {
+                    //remove unwanted part
+                    var index = err.stack.search(/\n\s*at ContextifyScript.Script.runInContext/);
+                    err.stack = err.stack.slice(0, index).split('\n').slice(0,-1).join('\n');
+                    var stack = err.stack.split(/\r?\n/);
+
+                    //store the error in msg to be used in flows
+                    msg.error = err;
 
                     var line = 0;
                     var errorMessage;

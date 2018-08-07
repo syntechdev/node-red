@@ -39,19 +39,28 @@ module.exports = function(RED) {
                     node.tout = null;
                 },333);
             }
-            if (filename === "") { node.warn(RED._("file.errors.nofilename")); }
-            else if (node.overwriteFile === "delete") {
+            if (filename === "") {
+                node.warn(RED._("file.errors.nofilename"));
+            } else if (node.overwriteFile === "delete") {
                 fs.unlink(filename, function (err) {
-                    if (err) { node.error(RED._("file.errors.deletefail",{error:err.toString()}),msg); }
-                    else if (RED.settings.verbose) { node.log(RED._("file.status.deletedfile",{file:filename})); }
+                    if (err) {
+                        node.error(RED._("file.errors.deletefail",{error:err.toString()}),msg);
+                    } else {
+                        if (RED.settings.verbose) {
+                            node.log(RED._("file.status.deletedfile",{file:filename}));
+                        }
+                        node.send(msg);
+                    }
                 });
-            }
-            else if (msg.hasOwnProperty("payload") && (typeof msg.payload !== "undefined")) {
+            } else if (msg.hasOwnProperty("payload") && (typeof msg.payload !== "undefined")) {
                 var dir = path.dirname(filename);
                 if (node.createDir) {
-                    fs.ensureDir(dir, function(err) {
-                        if (err) { node.error(RED._("file.errors.createfail",{error:err.toString()}),msg); }
-                    });
+                    try {
+                        fs.ensureDirSync(dir);
+                    } catch(err) {
+                        node.error(RED._("file.errors.createfail",{error:err.toString()}),msg);
+                        return;
+                    }
                 }
 
                 var data = msg.payload;
@@ -60,16 +69,22 @@ module.exports = function(RED) {
                 }
                 if (typeof data === "boolean") { data = data.toString(); }
                 if (typeof data === "number") { data = data.toString(); }
-                if ((this.appendNewline) && (!Buffer.isBuffer(data))) { data += os.EOL; }
-                node.data.push(Buffer.from(data));
+                if ((node.appendNewline) && (!Buffer.isBuffer(data))) { data += os.EOL; }
+                node.data.push({msg:msg,data:Buffer.from(data)});
 
                 while (node.data.length > 0) {
-                    if (this.overwriteFile === "true") {
-                        node.wstream = fs.createWriteStream(filename, { encoding:'binary', flags:'w', autoClose:true });
-                        node.wstream.on("error", function(err) {
-                            node.error(RED._("file.errors.writefail",{error:err.toString()}),msg);
-                        });
-                        node.wstream.end(node.data.shift());
+                    if (node.overwriteFile === "true") {
+                        (function(packet) {
+                            node.wstream = fs.createWriteStream(filename, { encoding:'binary', flags:'w', autoClose:true });
+                            node.wstream.on("error", function(err) {
+                                node.error(RED._("file.errors.writefail",{error:err.toString()}),msg);
+                            });
+                            node.wstream.on("open", function() {
+                                node.wstream.end(packet.data, function() {
+                                    node.send(packet.msg);
+                                });
+                            })
+                        })(node.data.shift());
                     }
                     else {
                         // Append mode
@@ -112,10 +127,17 @@ module.exports = function(RED) {
                         }
                         if (node.filename) {
                             // Static filename - write and reuse the stream next time
-                            node.wstream.write(node.data.shift());
+                            var packet = node.data.shift()
+                            node.wstream.write(packet.data, function() {
+                                node.send(packet.msg);
+                            });
+
                         } else {
                             // Dynamic filename - write and close the stream
-                            node.wstream.end(node.data.shift());
+                            var packet = node.data.shift()
+                            node.wstream.end(packet.data, function() {
+                                node.send(packet.msg);
+                            });
                             delete node.wstream;
                             delete node.wstreamIno;
                         }
@@ -186,14 +208,9 @@ module.exports = function(RED) {
                                             parts:{index:count, ch:ch, type:type, id:msg._msgid}
                                         }
                                         count += 1;
-                                        if ((chunk.length < hwm) && (bits[i+1].length === 0)) {
-                                            m.parts.count = count;
-                                        }
                                         node.send(m);
                                     }
                                     spare = bits[i];
-                                    if (chunk.length !== hwm) { getout = false; }
-                                    //console.log("LEFT",bits[i].length,bits[i]);
                                 }
                                 if (node.format === "stream") {
                                     var m = {
@@ -229,6 +246,18 @@ module.exports = function(RED) {
                             if (node.format === "utf8") { msg.payload = lines.toString(); }
                             else { msg.payload = lines; }
                             node.send(msg);
+                        }
+                        else if (node.format === "lines") {
+                            var m = { payload: spare,
+                                      parts: {
+                                          index: count,
+                                          count: count+1,
+                                          ch: ch,
+                                          type: type,
+                                          id: msg._msgid
+                                      }
+                                    };
+                            node.send(m);
                         }
                         else if (getout) { // last chunk same size as high water mark - have to send empty extra packet.
                             var m = { parts:{index:count, count:count, ch:ch, type:type, id:msg._msgid} };

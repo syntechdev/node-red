@@ -16,7 +16,9 @@
 
 var net = require("net");
 var should = require("should");
-var helper = require("../../helper.js");
+var stoppable = require('stoppable');
+var helper = require("node-red-node-test-helper");
+
 var tcpinNode = require("../../../../nodes/core/io/31-tcpin.js");
 
 
@@ -26,20 +28,13 @@ describe('TCP in Node', function() {
     var server_port = 9300;
     var reply_data = undefined;
 
-    before(function(done) {
-        done();
-    });
-
-    after(function() {
-    });
-
     beforeEach(function(done) {
         startServer(done);
     });
 
-    afterEach(function() {
-        stopServer();
+    afterEach(function(done) {
         helper.unload();
+        stopServer(done);
     });
 
     function sendArray(sock, array) {
@@ -52,20 +47,20 @@ describe('TCP in Node', function() {
             sock.end();
         }
     }
-    
+
     function startServer(done) {
         server_port += 1;
-        server = net.createServer(function(c) {
+        server = stoppable(net.createServer(function(c) {
             sendArray(c, reply_data);
-        }).listen(server_port, "localhost", function(err) {
+        })).listen(server_port, "localhost", function(err) {
             done(err);
         });
     }
 
-    function stopServer() {
-        server.close();
+    function stopServer(done) {
+        server.stop(done);
     }
-    
+
     function send(wdata) {
         var opt = {port:port, host:"localhost"};
         var client = net.createConnection(opt, function() {

@@ -34,10 +34,18 @@ module.exports = function(RED) {
         // match absolute url
         node.isServer = !/^ws{1,2}:\/\//i.test(node.path);
         node.closing = false;
+        node.tls = n.tls;
 
         function startconn() {    // Connect to remote endpoint
             node.tout = null;
-            var socket = new ws(node.path);
+            var options = {};
+            if (node.tls) {
+                var tlsNode = RED.nodes.getNode(node.tls);
+                if (tlsNode) {
+                    tlsNode.addTLSOptions(options);
+                }
+            }
+            var socket = new ws(node.path,options);
             socket.setMaxListeners(0);
             node.server = socket; // keep for closing
             handleConnection(socket);
@@ -204,9 +212,12 @@ module.exports = function(RED) {
         if (this.serverConfig) {
             this.serverConfig.registerInputNode(this);
             // TODO: nls
-            this.serverConfig.on('opened', function(n) { node.status({fill:"green",shape:"dot",text:"connected "+n}); });
-            this.serverConfig.on('erro', function() { node.status({fill:"red",shape:"ring",text:"error"}); });
-            this.serverConfig.on('closed', function() { node.status({fill:"red",shape:"ring",text:"disconnected"}); });
+            this.serverConfig.on('opened', function(n) { node.status({fill:"green",shape:"dot",text:RED._("websocket.status.connected",{count:n})}); });
+            this.serverConfig.on('erro', function() { node.status({fill:"red",shape:"ring",text:"common.status.error"}); });
+            this.serverConfig.on('closed', function(n) {
+                if (n > 0) { node.status({fill:"green",shape:"dot",text:RED._("websocket.status.connected",{count:n})}); }
+                else { node.status({fill:"red",shape:"ring",text:"common.status.disconnected"}); }
+            });
         } else {
             this.error(RED._("websocket.errors.missing-conf"));
         }
@@ -229,9 +240,12 @@ module.exports = function(RED) {
         }
         else {
             // TODO: nls
-            this.serverConfig.on('opened', function(n) { node.status({fill:"green",shape:"dot",text:"connected "+n}); });
-            this.serverConfig.on('erro', function() { node.status({fill:"red",shape:"ring",text:"error"}); });
-            this.serverConfig.on('closed', function() { node.status({fill:"red",shape:"ring",text:"disconnected"}); });
+            this.serverConfig.on('opened', function(n) { node.status({fill:"green",shape:"dot",text:RED._("websocket.status.connected",{count:n})}); });
+            this.serverConfig.on('erro', function() { node.status({fill:"red",shape:"ring",text:"common.status.error"}); });
+            this.serverConfig.on('closed', function(n) {
+                if (n > 0) { node.status({fill:"green",shape:"dot",text:RED._("websocket.status.connected",{count:n})}); }
+                else { node.status({fill:"red",shape:"ring",text:"common.status.disconnected"}); }
+            });
         }
         this.on("input", function(msg) {
             var payload;

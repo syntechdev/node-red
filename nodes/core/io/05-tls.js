@@ -25,6 +25,7 @@ module.exports = function(RED) {
         var certPath = n.cert.trim();
         var keyPath = n.key.trim();
         var caPath = n.ca.trim();
+        this.servername = (n.servername||"").trim();
 
         if ((certPath.length > 0) || (keyPath.length > 0)) {
 
@@ -77,7 +78,8 @@ module.exports = function(RED) {
         credentials: {
             certdata: {type:"text"},
             keydata: {type:"text"},
-            cadata: {type:"text"}
+            cadata: {type:"text"},
+            passphrase: {type:"password"}
         },
         settings: {
             tlsConfigDisableLocalFiles: {
@@ -97,6 +99,12 @@ module.exports = function(RED) {
             }
             if (this.ca) {
                 opts.ca = this.ca;
+            }
+            if (this.credentials && this.credentials.passphrase) {
+                opts.passphrase = this.credentials.passphrase;
+            }
+            if (this.servername) {
+                opts.servername = this.servername;
             }
             opts.rejectUnauthorized = this.verifyservercert;
         }

@@ -17,7 +17,7 @@
 var should = require("should");
 
 var rangeNode = require("../../../../nodes/core/logic/16-range.js");
-var helper = require("../../helper.js");
+var helper = require("node-red-node-test-helper");
 
 describe('range Node', function() {
 
@@ -135,11 +135,13 @@ describe('range Node', function() {
             var sinon = require('sinon');
             sinon.stub(rangeNode1, 'log', function(log) {
                 if (log.indexOf("notnumber") > -1) {
+                    rangeNode1.log.restore();
                     done();
                 } else {
                     try {
                         should.fail(null, null, "Non-number inputs should be reported!");
                     } catch (err) {
+                        rangeNode1.log.restore();
                         done(err);
                     }
                 }

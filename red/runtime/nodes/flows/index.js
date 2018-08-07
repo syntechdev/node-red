@@ -37,6 +37,7 @@ var activeFlowConfig = null;
 
 var activeFlows = {};
 var started = false;
+var credentialsPendingReset = false;
 
 var activeNodesToFlow = {};
 var subflowInstanceNodeMap = {};
@@ -70,18 +71,35 @@ function init(runtime) {
 }
 
 function loadFlows() {
-    return storage.getFlows().then(function(config) {
+    var config;
+    return storage.getFlows().then(function(_config) {
+        config = _config;
         log.debug("loaded flow revision: "+config.rev);
         return credentials.load(config.credentials).then(function() {
+            events.emit("runtime-event",{id:"runtime-state",retain:true});
             return config;
         });
-    }).otherwise(function(err) {
-        log.warn(log._("nodes.flows.error",{message:err.toString()}));
-        console.log(err.stack);
+    }).catch(function(err) {
+        if (err.code === "credentials_load_failed" && !storage.projects) {
+            // project disabled, credential load failed
+            credentialsPendingReset = true;
+            log.warn(log._("nodes.flows.error",{message:err.toString()}));
+            events.emit("runtime-event",{id:"runtime-state",payload:{type:"warning",error:err.code,text:"notification.warnings.credentials_load_failed_reset"},retain:true});
+            return config;
+        } else {
+            activeConfig = null;
+            events.emit("runtime-event",{id:"runtime-state",payload:{type:"warning",error:err.code,project:err.project,text:"notification.warnings."+err.code},retain:true});
+            if (err.code === "project_not_found") {
+                log.warn(log._("storage.localfilesystem.projects.project-not-found",{project:err.project}));
+            } else {
+                log.warn(log._("nodes.flows.error",{message:err.toString()}));
+            }
+            throw err;
+        }
     });
 }
-function load() {
-    return setFlows(null,"load",false);
+function load(forceStart) {
+    return setFlows(null,"load",false,forceStart);
 }
 
 /*
@@ -89,7 +107,7 @@ function load() {
  * type - full/nodes/flows/load (default full)
  * muteLog - don't emit the standard log messages (used for individual flow api)
  */
-function setFlows(_config,type,muteLog) {
+function setFlows(_config,type,muteLog,forceStart) {
     type = type||"full";
 
     var configSavePromise = null;
@@ -109,6 +127,15 @@ function setFlows(_config,type,muteLog) {
         config = clone(_config);
         newFlowConfig = flowUtil.parseConfig(clone(config));
         diff = flowUtil.diffConfigs(activeFlowConfig,newFlowConfig);
+
+        // Now the flows have been compared, remove any credentials from newFlowConfig
+        // so they don't cause false-positive diffs the next time a flow is deployed
+        for (var id in newFlowConfig.allNodes) {
+            if (newFlowConfig.allNodes.hasOwnProperty(id)) {
+                delete newFlowConfig.allNodes[id].credentials;
+            }
+        }
+
         credentials.clean(config);
         var credsDirty = credentials.dirty();
         configSavePromise = credentials.export().then(function(creds) {
@@ -131,14 +158,15 @@ function setFlows(_config,type,muteLog) {
                 rev:flowRevision
             };
             activeFlowConfig = newFlowConfig;
-            if (started) {
+            if (forceStart || started) {
                 return stop(type,diff,muteLog).then(function() {
-                    context.clean(activeFlowConfig);
-                    start(type,diff,muteLog).then(function() {
-                        events.emit("runtime-event",{id:"runtime-deploy",payload:{revision:flowRevision},retain: true});
+                    return context.clean(activeFlowConfig).then(function() {
+                        start(type,diff,muteLog).then(function() {
+                            events.emit("runtime-event",{id:"runtime-deploy",payload:{revision:flowRevision},retain: true});
+                        });
+                        return flowRevision;
                     });
-                    return flowRevision;
-                }).otherwise(function(err) {
+                }).catch(function(err) {
                 })
             } else {
                 events.emit("runtime-event",{id:"runtime-deploy",payload:{revision:flowRevision},retain: true});
@@ -251,7 +279,7 @@ function start(type,diff,muteLog) {
             log.info(log._("nodes.flows.missing-type-install-2"));
             log.info("  "+settings.userDir);
         }
-        events.emit("runtime-event",{id:"runtime-state",payload:{type:"warning",text:"notification.warnings.missing-types"},retain:true});
+        events.emit("runtime-event",{id:"runtime-state",payload:{error:"missing-types", type:"warning",text:"notification.warnings.missing-types",types:activeFlowConfig.missingTypes},retain:true});
         return when.resolve();
     }
     if (!muteLog) {
@@ -310,7 +338,12 @@ function start(type,diff,muteLog) {
         }
     }
     events.emit("nodes-started");
-    events.emit("runtime-event",{id:"runtime-state",retain:true});
+
+    if (credentialsPendingReset === true) {
+        credentialsPendingReset = false;
+    } else {
+        events.emit("runtime-event",{id:"runtime-state",retain:true});
+    }
 
     if (!muteLog) {
         if (type !== "full") {
@@ -323,6 +356,9 @@ function start(type,diff,muteLog) {
 }
 
 function stop(type,diff,muteLog) {
+    if (!started) {
+        return when.resolve();
+    }
     type = type||"full";
     diff = diff||{
         added:[],
@@ -442,11 +478,19 @@ function addFlow(flow) {
     }
     flow.id = redUtil.generateId();
 
-    var nodes = [{
+    var tabNode = {
         type:'tab',
         label:flow.label,
         id:flow.id
-    }];
+    }
+    if (flow.hasOwnProperty('info')) {
+        tabNode.info = flow.info;
+    }
+    if (flow.hasOwnProperty('disabled')) {
+        tabNode.disabled = flow.disabled;
+    }
+
+    var nodes = [tabNode];
 
     for (i=0;i<flow.nodes.length;i++) {
         node = flow.nodes[i];
@@ -498,6 +542,12 @@ function getFlow(id) {
     };
     if (flow.label) {
         result.label = flow.label;
+    }
+    if (flow.disabled) {
+        result.disabled = flow.disabled;
+    }
+    if (flow.hasOwnProperty('info')) {
+        result.info = flow.info;
     }
     if (id !== 'global') {
         result.nodes = [];
@@ -588,6 +638,13 @@ function updateFlow(id,newFlow) {
             label:newFlow.label,
             id:id
         }
+        if (newFlow.hasOwnProperty('info')) {
+            tabNode.info = newFlow.info;
+        }
+        if (newFlow.hasOwnProperty('disabled')) {
+            tabNode.disabled = newFlow.disabled;
+        }
+
         nodes = [tabNode].concat(newFlow.nodes||[]).concat(newFlow.configs||[]);
         nodes.forEach(function(n) {
             n.z = id;

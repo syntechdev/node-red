@@ -35,7 +35,9 @@ RED.sidebar = (function() {
                 tab.onremove.call(tab);
             }
         },
-        minimumActiveTabWidth: 110
+        // minimumActiveTabWidth: 70,
+        collapsible: true
+        // scrollable: true
     });
 
     var knownTabs = {
@@ -57,6 +59,8 @@ RED.sidebar = (function() {
         } else if (typeof title === "object") {
             options = title;
         }
+
+        delete options.closeable;
 
         options.wrapper = $('<div>',{style:"height:100%"}).appendTo("#sidebar-content")
         options.wrapper.append(options.content);
@@ -80,6 +84,8 @@ RED.sidebar = (function() {
             },
             group: "sidebar-tabs"
         });
+
+        options.iconClass = options.iconClass || "fa fa-square-o"
 
         knownTabs[options.id] = options;
 
@@ -212,6 +218,7 @@ RED.sidebar = (function() {
         showSidebar();
         RED.sidebar.info.init();
         RED.sidebar.config.init();
+        RED.sidebar.context.init();
         // hide info bar at start if screen rather narrow...
         if ($(window).width() < 600) { RED.menu.setSelected("menu-item-sidebar",false); }
     }

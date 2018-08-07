@@ -40,6 +40,7 @@ RED.nodes = (function() {
         var nodeSets = {};
         var typeToId = {};
         var nodeDefinitions = {};
+        var iconSets = {};
 
         nodeDefinitions['tab'] = {
             defaults: {
@@ -132,7 +133,7 @@ RED.nodes = (function() {
             registerNodeType: function(nt,def) {
                 nodeDefinitions[nt] = def;
                 def.type = nt;
-                if (def.category != "subflows") {
+                if (nt.substring(0,8) != "subflow:") {
                     def.set = nodeSets[typeToId[nt]];
                     nodeSets[typeToId[nt]].added = true;
                     nodeSets[typeToId[nt]].enabled = true;
@@ -170,6 +171,12 @@ RED.nodes = (function() {
             },
             getNodeType: function(nt) {
                 return nodeDefinitions[nt];
+            },
+            setIconSets: function(sets) {
+                iconSets = sets;
+            },
+            getIconSets: function() {
+                return iconSets;
             }
         };
         return exports;
@@ -265,10 +272,19 @@ RED.nodes = (function() {
                 if (updatedConfigNode) {
                     RED.workspaces.refresh();
                 }
+                try {
+                    if (node._def.oneditdelete) {
+                        node._def.oneditdelete.call(node);
+                    }
+                } catch(err) {
+                    console.log("oneditdelete",node.id,node.type,err.toString());
+                }
                 RED.events.emit('nodes:remove',node);
             }
         }
         if (node && node._def.onremove) {
+            // Deprecated: never documented but used by some early nodes
+            console.log("Deprecated API warning: node type ",node.type," has an onremove function - should be oneditremove - please report");
             node._def.onremove.call(n);
         }
         return {links:removedLinks,nodes:removedNodes};
@@ -339,8 +355,8 @@ RED.nodes = (function() {
         RED.nodes.registerType("subflow:"+sf.id, {
             defaults:{name:{value:""}},
             info: sf.info,
-            icon:"subflow.png",
-            category: "subflows",
+            icon: function() { return sf.icon||"subflow.png" },
+            category: sf.category || "subflows",
             inputs: sf.in.length,
             outputs: sf.out.length,
             color: "#da9",
@@ -475,7 +491,9 @@ RED.nodes = (function() {
             for (var j=0;j<wires.length;j++) {
                 var w = wires[j];
                 if (w.target.type != "subflow") {
-                    node.wires[w.sourcePort].push(w.target.id);
+                    if (w.sourcePort < node.wires.length) {
+                        node.wires[w.sourcePort].push(w.target.id);
+                    }
                 }
             }
 
@@ -484,6 +502,12 @@ RED.nodes = (function() {
             }
             if (n.outputs > 0 && n.outputLabels && !/^\s*$/.test(n.outputLabels.join(""))) {
                 node.outputLabels = n.outputLabels.slice();
+            }
+            if ((!n._def.defaults || !n._def.defaults.hasOwnProperty("icon")) && n.icon) {
+                var defIcon = RED.utils.getDefaultNodeIcon(n._def, n);
+                if (n.icon !== defIcon.module+"/"+defIcon.file) {
+                    node.icon = n.icon;
+                }
             }
         }
         return node;
@@ -495,6 +519,7 @@ RED.nodes = (function() {
         node.type = n.type;
         node.name = n.name;
         node.info = n.info;
+        node.category = n.category;
         node.in = [];
         node.out = [];
 
@@ -528,7 +553,11 @@ RED.nodes = (function() {
         if (node.out.length > 0 && n.outputLabels && !/^\s*$/.test(n.outputLabels.join(""))) {
             node.outputLabels = n.outputLabels.slice();
         }
-
+        if (n.icon) {
+            if (n.icon !== "node-red/subflow.png") {
+                node.icon = n.icon;
+            }
+        }
 
         return node;
     }
@@ -701,7 +730,9 @@ RED.nodes = (function() {
         if (!$.isArray(newNodes)) {
             newNodes = [newNodes];
         }
+        var isInitialLoad = false;
         if (!initialLoad) {
+            isInitialLoad = true;
             initialLoad = JSON.parse(JSON.stringify(newNodes));
         }
         var unknownTypes = [];
@@ -722,10 +753,10 @@ RED.nodes = (function() {
             }
 
         }
-        if (unknownTypes.length > 0) {
+        if (!isInitialLoad && unknownTypes.length > 0) {
             var typeList = "<ul><li>"+unknownTypes.join("</li><li>")+"</li></ul>";
             var type = "type"+(unknownTypes.length > 1?"s":"");
-            RED.notify("<strong>"+RED._("clipboard.importUnrecognised",{count:unknownTypes.length})+"</strong>"+typeList,"error",false,10000);
+            RED.notify("<p>"+RED._("clipboard.importUnrecognised",{count:unknownTypes.length})+"</p>"+typeList,"error",false,10000);
         }
 
         var activeWorkspace = RED.workspaces.active();
@@ -872,7 +903,7 @@ RED.nodes = (function() {
 
                 }
 
-                if (!existingConfigNode) { //} || !compareNodes(existingConfigNode,n,true) || existingConfigNode._def.exclusive || existingConfigNode.z !== n.z) {
+                if (!existingConfigNode || existingConfigNode._def.exclusive) { //} || !compareNodes(existingConfigNode,n,true) || existingConfigNode.z !== n.z) {
                     configNode = {id:n.id, z:n.z, type:n.type, users:[], _config:{}};
                     for (d in def.defaults) {
                         if (def.defaults.hasOwnProperty(d)) {
@@ -915,6 +946,7 @@ RED.nodes = (function() {
                         wires:n.wires,
                         inputLabels: n.inputLabels,
                         outputLabels: n.outputLabels,
+                        icon: n.icon,
                         changed:false,
                         _config:{}
                     };
@@ -983,6 +1015,13 @@ RED.nodes = (function() {
                                     set: registry.getNodeSet("node-red/unknown")
                                 };
                                 node.users = [];
+                                // This is a config node, so delete the default
+                                // non-config node properties
+                                delete node.x;
+                                delete node.y;
+                                delete node.wires;
+                                delete node.inputLabels;
+                                delete node.outputLabels;
                             }
                             var orig = {};
                             for (var p in n) {
@@ -995,10 +1034,31 @@ RED.nodes = (function() {
                             node.type = "unknown";
                         }
                         if (node._def.category != "config") {
-                            node.inputs = n.inputs||node._def.inputs;
-                            node.outputs = n.outputs||node._def.outputs;
+                            if (n.hasOwnProperty('inputs')) {
+                                node.inputs = n.inputs;
+                                node._config.inputs = JSON.stringify(n.inputs);
+                            } else {
+                                node.inputs = node._def.inputs;
+                            }
+                            if (n.hasOwnProperty('outputs')) {
+                                node.outputs = n.outputs;
+                                node._config.outputs = JSON.stringify(n.outputs);
+                            } else {
+                                node.outputs = node._def.outputs;
+                            }
+                            if (node.hasOwnProperty('wires') && node.wires.length > node.outputs) {
+                                if (!node._def.defaults.hasOwnProperty("outputs") || !isNaN(parseInt(n.outputs))) {
+                                    // If 'wires' is longer than outputs, clip wires
+                                    console.log("Warning: node.wires longer than node.outputs - trimming wires:",node.id," wires:",node.wires.length," outputs:",node.outputs);
+                                    node.wires = node.wires.slice(0,node.outputs);
+                                } else {
+                                    // The node declares outputs in its defaults, but has not got a valid value
+                                    // Defer to the length of the wires array
+                                    node.outputs = node.wires.length;
+                                }
+                            }
                             for (d in node._def.defaults) {
-                                if (node._def.defaults.hasOwnProperty(d)) {
+                                if (node._def.defaults.hasOwnProperty(d) && d !== 'inputs' && d !== 'outputs') {
                                     node[d] = n[d];
                                     node._config[d] = JSON.stringify(n[d]);
                                 }
@@ -1018,7 +1078,9 @@ RED.nodes = (function() {
                     addNode(node);
                     RED.editor.validateNode(node);
                     node_map[n.id] = node;
-                    if (node._def.category != "config") {
+                    // If an 'unknown' config node, it will not have been caught by the
+                    // proper config node handling, so needs adding to new_nodes here
+                    if (node.type === "unknown" || node._def.category !== "config") {
                         new_nodes.push(node);
                     }
                 }
@@ -1200,12 +1262,13 @@ RED.nodes = (function() {
             RED.workspaces.remove(workspaces[id]);
         });
         defaultWorkspace = null;
-
-        RED.nodes.dirty(true);
+        initialLoad = null;
+        RED.nodes.dirty(false);
         RED.view.redraw(true);
         RED.palette.refresh();
         RED.workspaces.refresh();
         RED.sidebar.config.refresh();
+        RED.sidebar.info.refresh();
 
         // var node_defs = {};
         // var nodes = [];
@@ -1271,6 +1334,9 @@ RED.nodes = (function() {
         removeNodeSet: registry.removeNodeSet,
         enableNodeSet: registry.enableNodeSet,
         disableNodeSet: registry.disableNodeSet,
+
+        setIconSets: registry.setIconSets,
+        getIconSets: registry.getIconSets,
 
         registerType: registry.registerNodeType,
         getType: registry.getNodeType,

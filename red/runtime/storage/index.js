@@ -25,6 +25,8 @@ var storageModule;
 var settingsAvailable;
 var sessionsAvailable;
 
+var libraryFlowsCachedResult = null;
+
 function moduleSelector(aSettings) {
     var toReturn;
     if (aSettings.storageModule) {
@@ -54,7 +56,19 @@ var storageModuleInterface = {
             } catch (e) {
                 return when.reject(e);
             }
-            return storageModule.init(runtime.settings);
+            if (!!storageModule.projects) {
+                var projectsEnabled = false;
+                if (runtime.settings.hasOwnProperty("editorTheme") && runtime.settings.editorTheme.hasOwnProperty("projects")) {
+                    projectsEnabled = runtime.settings.editorTheme.projects.enabled === true;
+                }
+                if (projectsEnabled) {
+                    storageModuleInterface.projects = storageModule.projects;
+                }
+            }
+            if (storageModule.sshkeys) {
+                storageModuleInterface.sshkeys = storageModule.sshkeys;
+            }
+            return storageModule.init(runtime.settings,runtime);
         },
         getFlows: function() {
             return storageModule.getFlows().then(function(flows) {
@@ -63,7 +77,7 @@ var storageModuleInterface = {
                         flows: flows,
                         credentials: creds
                     };
-                    result.rev = crypto.createHash('md5').update(JSON.stringify(result)).digest("hex");
+                    result.rev = crypto.createHash('md5').update(JSON.stringify(result.flows)).digest("hex");
                     return result;
                 })
             });
@@ -81,16 +95,16 @@ var storageModuleInterface = {
 
             return credentialSavePromise.then(function() {
                 return storageModule.saveFlows(flows).then(function() {
-                    return crypto.createHash('md5').update(JSON.stringify(config)).digest("hex");
+                    return crypto.createHash('md5').update(JSON.stringify(config.flows)).digest("hex");
                 })
             });
         },
         // getCredentials: function() {
         //     return storageModule.getCredentials();
         // },
-        // saveCredentials: function(credentials) {
-        //     return storageModule.saveCredentials(credentials);
-        // },
+        saveCredentials: function(credentials) {
+            return storageModule.saveCredentials(credentials);
+        },
         getSettings: function() {
             if (settingsAvailable) {
                 return storageModule.getSettings();
@@ -144,7 +158,14 @@ var storageModuleInterface = {
             if (storageModule.hasOwnProperty("getAllFlows")) {
                 return storageModule.getAllFlows();
             } else {
-                return listFlows("/");
+                if (libraryFlowsCachedResult) {
+                    return Promise.resolve(libraryFlowsCachedResult);
+                } else {
+                    return listFlows("/").then(function(result) {
+                        libraryFlowsCachedResult = result;
+                        return result;
+                    });
+                }
             }
         },
         getFlow: function(fn) {
@@ -166,6 +187,7 @@ var storageModuleInterface = {
                 err.code = "forbidden";
                 return when.reject(err);
             }
+            libraryFlowsCachedResult = null;
             if (storageModule.hasOwnProperty("saveFlow")) {
                 return storageModule.saveFlow(fn, data);
             } else {

@@ -16,7 +16,7 @@
 
 var should = require("should");
 var sinon = require("sinon");
-var helper = require("../../helper.js");
+var helper = require("node-red-node-test-helper");
 var execNode = require("../../../../nodes/core/core/75-exec.js");
 var osType = require("os").type();
 
@@ -544,6 +544,7 @@ describe('exec node', function() {
         it('should return an error for a failing command', function(done) {
             var flow;
             var expected;
+            var expectedFound = false;
             if (osType === "Windows_NT") {
                 // Cannot use mkdir because Windows mkdir command automatically creates non-existent directories.
                 flow = [{id:"n1",type:"exec",wires:[["n2"],["n3"],["n4"]],command:"ping /foo/bar/doo/dah", addpay:false, append:"", useSpawn:"true", oldrc:"false"},
@@ -563,12 +564,18 @@ describe('exec node', function() {
                     try {
                         msg.should.have.property("payload");
                         msg.payload.should.be.a.String();
-                        msg.payload.indexOf(expected).should.not.be.equal(-1);
+                        if (msg.payload.indexOf(expected) >= 0) {
+                            // The error text on the stderr stream might get sent in more than one piece.
+                            // We only need to know that it occurred before the return code is sent,
+                            // as checked below in node n4.
+                            expectedFound = true;
+                        }
                     }
                     catch(err) { done(err); }
                 });
                 n4.on("input", function(msg) {
                     try {
+                        expectedFound.should.be.true;
                         msg.should.have.property("payload");
                         msg.payload.should.have.property("code",1);
                         done();
